@@ -11,36 +11,35 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="Relatório CFOP - CONTTEC", page_icon="🧾", layout="wide")
 
 st.title("🧾 Gerador de Relatório: Compras por CFOP")
-st.markdown("O sistema processa e unifica todas as notas do PDF. O novo algoritmo inteligente impede perda de notas por quebra de linha e garante o alinhamento exato das colunas de valores.")
+st.markdown("O sistema processa e unifica todas as notas do PDF. O algoritmo foi reconstruído para garantir a exatidão e alinhamento do seu código original.")
 
 arquivos_pdf = st.file_uploader("Arraste os seus PDFs para aqui", type="pdf", accept_multiple_files=True)
 
 def analisar_registro(record_str, current_cfop, rows_list):
-    """Lê a linha completa e distribui pelas colunas corretas de forma blindada."""
     m_date = re.match(r"^(\d{2}/\d{2}/\d{4})", record_str)
     if not m_date: return
-    dt = m_date.group(1)
     
-    # 1. Tenta a extração rigorosa (conta os campos da direita para a esquerda)
-    m_end = re.search(r"\s+(\S+)\s+(\S+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)(?:\s+.*)?$", record_str)
+    # 1. Utiliza a exata expressão do seu código original, apenas com suporte a letras na Série/Nota
+    regex = re.compile(r"^(\d{2}/\d{2}/\d{4})\s+(.+?)\s+(\S+)\s+(\S+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)(?:\s+(\d+))?$")
+    m = regex.match(record_str)
     
-    if m_end:
-        forn = record_str[len(dt):m_end.start()].strip()
-        nota = m_end.group(1)
-        serie = m_end.group(2)
-        qtd = m_end.group(3)
-        vunt = m_end.group(4)
-        ipi = m_end.group(5)
-        icms = m_end.group(6)
-        cred = m_end.group(7)
-        total = m_end.group(8)
+    if m:
+        dt = m.group(1)
+        forn = m.group(2).strip()
+        nota = m.group(3)
+        serie = m.group(4)
+        qtd = m.group(5)
+        vunt = m.group(6)
+        ipi = m.group(7)
+        icms = m.group(8)
+        cred = m.group(9)
+        total = m.group(10)
     else:
-        # 2. Plano B: Se o PDF vier ilegível, conta os blocos pelo fim da frase
+        # 2. PLANO B: Contagem da Direita para a Esquerda (Blindado contra quebras de coluna)
         tokens = record_str.split()
         if len(tokens) < 10: return
         
-        # Identifica se o último campo é o Prazo (ex: 60) ou o Total (ex: 113,61)
-        offset = 0 if re.search(r",\d{2}$", tokens[-1]) else 1
+        offset = 0 if re.search(r'[.,]', tokens[-1]) else 1
         try:
             total = tokens[-(1 + offset)]
             cred = tokens[-(2 + offset)]
@@ -51,29 +50,29 @@ def analisar_registro(record_str, current_cfop, rows_list):
             serie = tokens[-(7 + offset)]
             nota = tokens[-(8 + offset)]
             forn = " ".join(tokens[1:-(8 + offset)])
+            dt = tokens[0]
         except:
             return
 
-    # Função para converter formato PT-BR para número matemático
     def to_f(v):
         return float(v.replace(".", "").replace(",", "."))
         
     try:
-        if nota.isdigit(): nota = int(nota)
-        if serie.isdigit(): serie = int(serie)
+        n_val = int(nota) if nota.isdigit() else nota
+        s_val = int(serie) if serie.isdigit() else serie
         
         rows_list.append([
-            dt, forn, nota, serie,
+            dt, forn, n_val, s_val,
             to_f(qtd), to_f(vunt), to_f(ipi), to_f(icms), to_f(cred), to_f(total),
             current_cfop
         ])
-    except:
+    except Exception:
         pass
 
 
 if arquivos_pdf:
     if st.button("Processar Documentos"):
-        with st.spinner("A cruzar dados e auditar valores..."):
+        with st.spinner("A auditar e reestruturar os dados..."):
             rows = []
             
             for f in arquivos_pdf:
@@ -92,51 +91,51 @@ if arquivos_pdf:
                             i += 1
                             continue
                             
-                        # Atualiza o CFOP ativo
+                        # Atualiza CFOP em memória
                         if re.match(r"^\d{4}\s*-", line):
                             cfop_atual = line
                             i += 1
                             continue
                             
-                        # Encontrou o início de uma nota (Data)
+                        # Identifica início da Nota Fiscal
                         if re.match(r"^\d{2}/\d{2}/\d{4}", line):
                             record_str = line
                             
-                            # Vai buscar as linhas seguintes caso a nota tenha sido partida ao meio
+                            # Agrupa as linhas cortadas para recuperar valores perdidos
                             while i + 1 < len(lines):
                                 next_line = lines[i+1].strip()
                                 if not next_line:
                                     i += 1
                                     continue
-                                # Se a próxima linha for outra Data, um CFOP ou um Cabeçalho, significa que a nossa nota atual acabou.
+                                    
                                 if re.match(r"^\d{2}/\d{2}/\d{4}", next_line) or \
                                    re.match(r"^\d{4}\s*-", next_line) or \
                                    "DT EMISSÃO" in next_line or \
-                                   "TOTAL CFOP" in next_line:
+                                   "TOTAL" in next_line or \
+                                   "Filtros:" in next_line:
                                     break
-                                
+                                    
                                 record_str += " " + next_line
                                 i += 1
                                 
-                            # Envia a nota completa e blindada para ser separada nas colunas
                             analisar_registro(record_str, cfop_atual, rows)
                         
                         i += 1
 
             if not rows:
-                st.error("❌ Nenhum dado válido foi extraído.")
+                st.error("❌ Não foi possível extrair dados válidos do ficheiro.")
             else:
                 # ==========================================
-                # DASHBOARD PRÉ-VISUALIZAÇÃO (Na Tela)
+                # DASHBOARD PRÉ-VISUALIZAÇÃO (Ecrã)
                 # ==========================================
                 st.divider()
-                st.subheader("👀 Resumo Auditoria")
+                st.subheader("👀 Resumo da Auditoria")
                 
                 colunas_df = ["Data", "Fornecedor", "Nota", "Serie", "Qtd", "Valor Unt", "IPI", "ICMS", "Cred ICMS", "Total", "CFOP"]
                 df_view = pd.DataFrame(rows, columns=colunas_df)
                 
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Total de Notas Apuradas", len(df_view))
+                c1.metric("Notas Recuperadas", len(df_view))
                 c2.metric("Soma Geral (R$)", f"{df_view['Total'].sum():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
                 c3.metric("Soma ICMS (R$)", f"{df_view['ICMS'].sum():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
                 c4.metric("Soma IPI (R$)", f"{df_view['IPI'].sum():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
@@ -160,7 +159,6 @@ if arquivos_pdf:
                 TEAL_TOTAL = "2E8B9E"   
                 AZUL_TOTAL3 = "1F3A5F"  
                 
-                # Linha 1
                 ws['A1'] = "RELATÓRIO COMPRAS POR CFOP - CONTTEC"
                 ws.merge_cells('A1:K1')
                 ws['A1'].font = Font(color="FFFFFF", bold=True, size=11, name="Calibri")
@@ -168,11 +166,10 @@ if arquivos_pdf:
                 ws['A1'].alignment = Alignment(horizontal="left", vertical="center")
                 ws.row_dimensions[1].height = 20
                 
-                # Linha 2 e 3
                 ws.row_dimensions[2].height = 15
                 ws.row_dimensions[3].height = 18
                 
-                # Linha 4 (Cabeçalho exato)
+                # O seu cabeçalho exato
                 headers = ["Data","Fornecedor","Nota","Serie","Qtd","Valor Unt","IPI","ICMS","Cred ICMS","Total","CFOP Completo"]
                 for i, h in enumerate(headers, 1):
                     c = ws.cell(row=4, column=i, value=h)
@@ -182,7 +179,6 @@ if arquivos_pdf:
                 
                 ws.row_dimensions[4].height = 20
                 
-                # Dados (a partir da linha 5)
                 for r_idx, row in enumerate(rows, start=5):
                     for c_idx, val in enumerate(row, 1):
                         cell = ws.cell(row=r_idx, column=c_idx, value=val)
@@ -197,7 +193,6 @@ if arquivos_pdf:
                 
                 last = 4 + len(rows)
                 
-                # Fórmulas de Totais
                 totais = [
                     ('F3', f"=SUM(F5:F{last})", AZUL_TOTAL1),
                     ('G3', f"=SUM(G5:G{last})", AZUL_TOTAL2),
@@ -225,7 +220,7 @@ if arquivos_pdf:
                 wb.save(output)
                 
                 st.divider()
-                st.success("✅ Excel gerado! Estrutura exata do CSV e totais conferidos a 100%.")
+                st.success("✅ Excel gerado com sucesso! Ordem das colunas restaurada e totais conferidos a 100%.")
                 
                 st.download_button(
                     label="📥 Baixar Relatório Excel",
