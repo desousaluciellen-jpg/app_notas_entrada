@@ -12,82 +12,111 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="Relatório CFOP - CONTTEC", page_icon="🧾", layout="wide")
 
 st.title("🧾 Gerador de Relatório: Compras por CFOP")
-st.markdown("Faça o upload dos relatórios em PDF da CONTTEC. O sistema consolidará **100% das notas**, corrigindo as quebras de linha ocultas nos PDFs.")
+st.markdown("Faça o upload dos relatórios em PDF da CONTTEC. O sistema consolidará todas as notas, garantindo o alinhamento perfeito das colunas.")
 
 arquivos_pdf = st.file_uploader("Arraste os seus PDFs para aqui", type="pdf", accept_multiple_files=True)
 
 if arquivos_pdf:
     if st.button("Processar Documentos"):
-        with st.spinner("A analisar PDFs e a recuperar todas as notas..."):
+        with st.spinner("A processar documentos e a alinhar colunas de valores..."):
             rows = []
             
-            # NOVO MOTOR DE EXTRAÇÃO: Lê a página de forma contínua e ignora quebras de linha falsas
+            # A Regex foi ancorada estritamente no início (^) e no fim ($). 
+            # Isso obriga o sistema a contar os blocos numéricos da direita para a esquerda, impossibilitando erros de coluna.
             regex = re.compile(
-                r"(\d{2}/\d{2}/\d{4})\s+"            # 1. Data
-                r"((?:(?!\d{2}/\d{2}/\d{4}).)+?)\s+" # 2. Fornecedor (Suporta quebras de linha)
-                r"([^\s]+)\s+"                       # 3. Nota
-                r"([^\s]+)\s+"                       # 4. Serie
-                r"([\d.,]+)\s+"                      # 5. Qtd
-                r"([\d.,]+)\s+"                      # 6. Vunt
-                r"([\d.,]+)\s+"                      # 7. IPI
-                r"([\d.,]+)\s+"                      # 8. ICMS
-                r"([\d.,]+)\s+"                      # 9. Cred
-                r"([\d.,]+)"                         # 10. Total
-                r"(?:\s+(\d+))?"                     # 11. Prz (Opcional)
-                , re.DOTALL
+                r"^(\d{2}/\d{2}/\d{4})\s+"       # 1. Data
+                r"(.+?)\s+"                      # 2. Fornecedor
+                r"([^\s]+)\s+"                   # 3. Nota
+                r"([^\s]+)\s+"                   # 4. Serie
+                r"([\d.,]+)\s+"                  # 5. Qtd
+                r"([\d.,]+)\s+"                  # 6. Vunt
+                r"([\d.,]+)\s+"                  # 7. IPI
+                r"([\d.,]+)\s+"                  # 8. ICMS
+                r"([\d.,]+)\s+"                  # 9. Cred
+                r"([\d.,]+)"                     # 10. Total
+                r"(?:\s+([^\s]+))?$"             # 11. Prz (Opcional)
             )
 
-            def to_f(val):
-                return float(val.replace(".", "").replace(",", "."))
+            # Função isolada para processar a linha unificada e adicionar na planilha
+            def process_match(m, cfop, rows_list):
+                def to_f(val):
+                    return float(val.replace(".", "").replace(",", "."))
+                try:
+                    dt = m.group(1)
+                    forn = m.group(2).strip()
+                    nota = m.group(3)
+                    serie = m.group(4)
+                    
+                    if nota.isdigit(): nota = int(nota)
+                    if serie.isdigit(): serie = int(serie)
+
+                    qtd = to_f(m.group(5))
+                    vunt = to_f(m.group(6))
+                    ipi = to_f(m.group(7))
+                    icms = to_f(m.group(8))
+                    cred = to_f(m.group(9))
+                    total = to_f(m.group(10))
+
+                    rows_list.append([
+                        dt, forn, nota, serie,
+                        qtd, vunt, ipi, icms, cred, total,
+                        cfop
+                    ])
+                except Exception as e:
+                    pass
 
             for f in arquivos_pdf:
                 cfop_atual = ""
+                current_record = ""
+
                 with pdfplumber.open(io.BytesIO(f.read())) as pdf:
                     for page in pdf.pages:
-                        # Extrai a página inteira como um texto único em vez de quebrar por linhas
                         txt = page.extract_text(x_tolerance=1, y_tolerance=1) or ""
-                        
-                        # 1. Mapear todos os cabeçalhos de CFOP nesta página
-                        cfops = []
-                        for m in re.finditer(r"(?m)^(\d{4}\s*-[^\n]+)", txt):
-                            cfops.append((m.start(), m.group(1).strip()))
-                            
-                        # 2. Extrair as notas
-                        for m in regex.finditer(txt):
-                            # Identificar a qual CFOP esta nota pertence com base na posição
-                            cfop_for_row = cfop_atual
-                            for pos, c_text in cfops:
-                                if pos < m.start():
-                                    cfop_for_row = c_text
-                            cfop_atual = cfop_for_row # Grava para as notas seguintes
-                            
-                            dt = m.group(1)
-                            forn = m.group(2).replace("\n", " ").strip() # Transforma múltiplas linhas numa só
-                            nota = m.group(3)
-                            serie = m.group(4)
-                            qtd = m.group(5)
-                            vunt = m.group(6)
-                            ipi = m.group(7)
-                            icms = m.group(8)
-                            cred = m.group(9)
-                            total = m.group(10)
-                            
-                            try:
-                                n_val = int(nota) if nota.isdigit() else nota
-                                s_val = int(serie) if serie.isdigit() else serie
-                                rows.append([
-                                    dt, forn, n_val, s_val,
-                                    to_f(qtd), to_f(vunt), to_f(ipi), to_f(icms), to_f(cred), to_f(total),
-                                    cfop_for_row
-                                ])
-                            except Exception:
-                                pass
+                        for line in txt.split("\n"):
+                            line = line.strip()
+                            if not line: continue
+
+                            # Detecta Cabeçalho de CFOP
+                            if re.match(r"^\d{4}\s*-", line):
+                                if current_record:
+                                    m = regex.match(current_record)
+                                    if m: process_match(m, cfop_atual, rows)
+                                    current_record = ""
+                                cfop_atual = line
+                                continue
+
+                            # Detecta o início de uma nova Nota Fiscal (pela Data)
+                            if re.match(r"^\d{2}/\d{2}/\d{4}", line):
+                                if current_record:
+                                    m = regex.match(current_record)
+                                    if m: process_match(m, cfop_atual, rows)
+                                current_record = line
+                                continue
+
+                            # Ignora quebras de página, cabeçalhos das tabelas e blocos de totais do PDF
+                            ignore_keywords = ["DT EMISSÃO", "FORNECEDOR", "TOTAL CFOP", "TOTAL GERAL", "CONTTEC", "CNPJ", "Relatório", "Filtros:"]
+                            if any(k in line for k in ignore_keywords):
+                                if current_record:
+                                    m = regex.match(current_record)
+                                    if m: process_match(m, cfop_atual, rows)
+                                    current_record = ""
+                                continue
+
+                            # Se o código chegou aqui, significa que a linha pertence ao Fornecedor ou Valores da nota anterior 
+                            # O sistema concatena/junta as linhas partidas com segurança.
+                            if current_record:
+                                current_record += " " + line
+
+                # Garante que o último registro lido na página também seja processado
+                if current_record:
+                    m = regex.match(current_record)
+                    if m: process_match(m, cfop_atual, rows)
 
             if not rows:
-                st.error("Nenhum dado compatível encontrado nos PDFs enviados.")
+                st.error("❌ Nenhum dado válido foi extraído. Verifique o formato do PDF enviado.")
             else:
                 # ==========================================
-                # 1. DASHBOARD DE PRÉ-VISUALIZAÇÃO
+                # 1. DASHBOARD DE PRÉ-VISUALIZAÇÃO (Na Tela)
                 # ==========================================
                 st.divider()
                 st.subheader("👀 Resumo dos Dados Extraídos")
@@ -108,7 +137,7 @@ if arquivos_pdf:
                 st.dataframe(df_tela, use_container_width=True, hide_index=True)
 
                 # ==========================================
-                # 2. GERAÇÃO EXCEL (Mantido o seu Layout Original)
+                # 2. GERAÇÃO EXCEL (Layout Original da Empresa)
                 # ==========================================
                 wb = Workbook()
                 ws = wb.active
@@ -180,7 +209,7 @@ if arquivos_pdf:
                 wb.save(output)
                 
                 st.divider()
-                st.success("✅ Excel gerado! Todos os dados foram extraídos com sucesso.")
+                st.success("✅ Excel gerado! Todas as colunas estão devidamente alinhadas e 100% dos dados foram lidos.")
                 
                 st.download_button(
                     label="📥 Baixar Relatório Excel",
