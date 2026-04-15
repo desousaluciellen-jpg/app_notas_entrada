@@ -1,117 +1,119 @@
-import streamlit as st
-import pdfplumber
-import pandas as pd
-import re
-import io
-from datetime import datetime
+
+import pdfplumber, pandas as pd, re
+from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
-from openpyxl.worksheet.table import Table, TableStyleInfo
-from openpyxl.utils import get_column_letter
 
-# Configuração da Página
-st.set_page_config(page_title="Portal de Notas - Entrada", page_icon="📝", layout="wide")
+PASTA = Path(__file__).parent
+PDFS = list(PASTA.glob("*.pdf")) + list(PASTA.glob("*.PDF"))
 
-st.title("📝 Consolidador de Notas de Entrada (CFOP)")
-st.markdown("Carregue os relatórios PDF da CONTTEC para consolidar as entradas, calcular impostos e gerar o Excel profissional.")
+for PDF_PATH in PDFS:
+    rows = []
+    cfop = ""
+    regex = re.compile(r"(\d{2}/\d{2}/\d{4})\s+(.+?)\s+(\d+)\s+(\d+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+(\d+)")
 
-# Upload de Ficheiros
-ficheiros_pdf = st.file_uploader("Selecione os PDFs de Notas de Entrada", type="pdf", accept_multiple_files=True)
+    with pdfplumber.open(PDF_PATH) as pdf:
+        for page in pdf.pages:
+            txt = page.extract_text(x_tolerance=1, y_tolerance=1) or ""
+            for line in txt.split("\n"):
+                line=line.strip()
+                if re.match(r"\d{4}\s*-\s*", line):
+                    cfop = line
+                    continue
+                m = regex.match(line)
+                if m:
+                    dt, forn, nota, serie, qtd, vunt, ipi, icms, cred, total, prz = m.groups()
+                    rows.append([dt, forn, int(nota), int(serie),
+                        float(qtd.replace(".","").replace(",",".")),
+                        float(vunt.replace(".","").replace(",",".")),
+                        float(ipi.replace(".","").replace(",",".")),
+                        float(icms.replace(".","").replace(",",".")),
+                        float(cred.replace(".","").replace(",",".")),
+                        float(total.replace(".","").replace(",",".")),
+                        cfop])
 
-if ficheiros_pdf:
-    if st.button("Processar e Consolidar"):
-        with st.spinner("A extrair dados dos documentos..."):
-            rows = []
-            cfop_atual = ""
-            # Expressão regular para capturar a linha da nota fiscal
-            regex = re.compile(r"(\d{2}/\d{2}/\d{4})\s+(.+?)\s+(\d+)\s+(\d+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+(\d+)")
-
-            for f in ficheiros_pdf:
-                with pdfplumber.open(io.BytesIO(f.read())) as pdf:
-                    for page in pdf.pages:
-                        text = page.extract_text(x_tolerance=1, y_tolerance=1) or ""
-                        for line in text.split("\n"):
-                            line = line.strip()
-                            # Identifica mudança de CFOP
-                            if re.match(r"\d{4}\s*-\s*", line):
-                                cfop_atual = line
-                                continue
-                            
-                            m = regex.match(line)
-                            if m:
-                                dt, forn, nota, serie, qtd, vunt, ipi, icms, cred, total, prz = m.groups()
-                                rows.append({
-                                    "CFOP": cfop_atual,
-                                    "DATA EMISSÃO": dt,
-                                    "FORNECEDOR": forn,
-                                    "NOTA": int(nota),
-                                    "SÉRIE": int(serie),
-                                    "QTD": float(qtd.replace(".","").replace(",",".")),
-                                    "VLR UNT": float(vunt.replace(".","").replace(",",".")),
-                                    "IPI": float(ipi.replace(".","").replace(",",".")),
-                                    "ICMS": float(icms.replace(".","").replace(",",".")),
-                                    "CRED ICMS": float(cred.replace(".","").replace(",",".")),
-                                    "TOTAL": float(total.replace(".","").replace(",",".")),
-                                    "PRZ MED": int(prz),
-                                    "ORIGEM": f.name
-                                })
-
-            if not rows:
-                st.error("Não foram encontrados dados compatíveis nos PDFs enviados.")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Compras"
+    
+    # CORES EXATAS DA IMAGEM
+    AZUL_ESCURO = "2C3E50"  # titulo e cabecalho
+    AZUL_TOTAL1 = "1F3A5F"  # 112.581,81
+    AZUL_TOTAL2 = "5B7C99"  # 2.531,28
+    TEAL_TOTAL = "2E8B9E"   # 1.208,69 e 0,00
+    AZUL_TOTAL3 = "1F3A5F"  # 205.956,09
+    
+    # LINHA 1 - TITULO
+    ws['A1'] = "RELATÓRIO COMPRAS POR CFOP - CONTTEC"
+    ws.merge_cells('A1:K1')
+    ws['A1'].font = Font(color="FFFFFF", bold=True, size=11, name="Calibri")
+    ws['A1'].fill = PatternFill(start_color=AZUL_ESCURO, end_color=AZUL_ESCURO, fill_type="solid")
+    ws['A1'].alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 20
+    
+    # LINHA 2 - vazia
+    ws.row_dimensions[2].height = 15
+    
+    # LINHA 3 - TOTAIS (colunas F a J)
+    ws.row_dimensions[3].height = 18
+    # sem bordas, sem fundo nas celulas vazias
+    
+    # LINHA 4 - CABECALHO
+    headers = ["Data","Fornecedor","Nota","Serie","Qtd","Valor Unt","IPI","ICMS","Cred ICMS","Total","CFOP Completo"]
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=4, column=i, value=h)
+        c.font = Font(color="FFFFFF", bold=True, size=11, name="Calibri")
+        c.fill = PatternFill(start_color=AZUL_ESCURO, end_color=AZUL_ESCURO, fill_type="solid")
+        c.alignment = Alignment(horizontal="center", vertical="center")
+    
+    ws.row_dimensions[4].height = 20
+    
+    # DADOS a partir linha 5
+    for r_idx, row in enumerate(rows, start=5):
+        for c_idx, val in enumerate(row, 1):
+            cell = ws.cell(row=r_idx, column=c_idx, value=val)
+            # SEM BORDAS, SEM FUNDO
+            cell.border = Border()
+            cell.fill = PatternFill(fill_type=None)
+            if c_idx == 2 or c_idx == 11:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
             else:
-                df = pd.DataFrame(rows)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            if 5 <= c_idx <= 10:
+                cell.number_format = '#,##0.00'
+    
+    last = 4 + len(rows)
+    
+    # APLICAR TOTAIS COM CORES
+    totais = [
+        ('F3', f"=SUM(F5:F{last})", AZUL_TOTAL1),
+        ('G3', f"=SUM(G5:G{last})", AZUL_TOTAL2),
+        ('H3', f"=SUM(H5:H{last})", TEAL_TOTAL),
+        ('I3', f"=SUM(I5:I{last})", TEAL_TOTAL),
+        ('J3', f"=SUM(J5:J{last})", AZUL_TOTAL3),
+    ]
+    for addr, formula, cor in totais:
+        c = ws[addr]
+        c.value = formula
+        c.fill = PatternFill(start_color=cor, end_color=cor, fill_type="solid")
+        c.font = Font(color="FFFFFF", bold=True, size=11)
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.number_format = '#,##0.00'
+    
+    # LARGURAS
+    widths = [11, 32, 9, 7, 7, 12, 10, 10, 11, 12, 42]
+    from openpyxl.utils import get_column_letter
+    for i,w in enumerate(widths,1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    
+    # FILTRO
+    ws.auto_filter.ref = f"A4:K{last}"
+    ws.freeze_panes = "A5"
+    
+    # REMOVER LINHAS DE GRADE DO EXCEL
+    ws.sheet_view.showGridLines = False
+    
+    wb.save(PDF_PATH.with_suffix('.xlsx'))
+    print(f"Gerado: {PDF_PATH.stem}.xlsx")
 
-                # --- PRÉ-VISUALIZAÇÃO NO ECRÃ ---
-                st.divider()
-                st.subheader("📊 Resumo Consolidado")
-                
-                c1, c2, c3, c4 = st.columns(4)
-                vlr_total = df["TOTAL"].sum()
-                ipi_total = df["IPI"].sum()
-                icms_total = df["ICMS"].sum()
-                
-                c1.metric("Total de Notas", len(df))
-                c2.metric("Valor Total", f"R$ {vlr_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-                c3.metric("Total IPI", f"R$ {ipi_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-                c4.metric("Total ICMS", f"R$ {icms_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-
-                # Tabela Interativa
-                st.dataframe(df, use_container_width=True, hide_index=True)
-
-                # --- GERAÇÃO DO EXCEL FORMATADO ---
-                output = io.BytesIO()
-                wb = Workbook()
-                ws = wb.active
-                ws.title = "Notas de Entrada"
-                
-                # Cabeçalho da Tabela
-                headers = list(df.columns)
-                ws.append(headers)
-                
-                for r in df.values.tolist():
-                    ws.append(r)
-
-                # Formatação Profissional (Cores baseadas no seu padrão)
-                last_row = len(df) + 1
-                last_col = get_column_letter(len(headers))
-                
-                tab = Table(displayName="TabelaNotas", ref=f"A1:{last_col}{last_row}")
-                tab.tableStyleInfo = TableStyleInfo(name="TableStyleLight15", showRowStripes=True)
-                ws.add_table(tab)
-                
-                # Formato Moeda
-                for col_num in range(6, 12): # Colunas de valores
-                    letra = get_column_letter(col_num)
-                    for cell in ws[letra]:
-                        if cell.row > 1:
-                            cell.number_format = '#,##0.00'
-
-                wb.save(output)
-                
-                st.download_button(
-                    label="📥 Descarregar Folha de Cálculo Excel",
-                    data=output.getvalue(),
-                    file_name=f"Consolidado_Entradas_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary"
-                )
+print("Concluido")
